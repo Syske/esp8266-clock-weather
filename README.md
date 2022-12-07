@@ -13,3 +13,4 @@
 https://gitee.com/taijichuangke/bilibili_weather_clock
 ```
 
+制作过程：[8266制作桌面气象小站](https://github.com/Syske/person-learning-note/blob/master/arduino/8266%E5%88%B6%E4%BD%9C%E6%A1%8C%E9%9D%A2%E6%B0%94%E8%B1%A1%E5%B0%8F%E7%AB%99.md)

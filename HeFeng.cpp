@@ -5,9 +5,11 @@
 #include <ESP8266WiFi.h>
 #include <WiFiClientSecureBearSSL.h>
 
+#include "HttpsGetUtils.h"
+
 HeFeng::HeFeng() {}
 
-void HeFeng::fans(HeFengCurrentData *data, String id) {  //获取粉丝数
+void HeFeng::fans(HeFengCurrentData *data, String id) {  // 获取粉丝数
   std::unique_ptr<BearSSL::WiFiClientSecure> client(
       new BearSSL::WiFiClientSecure);
   client->setInsecure();
@@ -21,7 +23,7 @@ void HeFeng::fans(HeFengCurrentData *data, String id) {  //获取粉丝数
     if (httpCode > 0) {
       // HTTP header has been send and Server response header has been
       // handled
-      Serial.printf("[HTTPS] GET... code: %d\n", httpCode);
+      Serial.printf("[HTTPS] GET... code: %d\n", https.errorToString(httpCode).c_str());
 
       if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
         String payload = https.getString();
@@ -47,56 +49,54 @@ void HeFeng::fans(HeFengCurrentData *data, String id) {  //获取粉丝数
 }
 
 void HeFeng::doUpdateCurr(HeFengCurrentData *data, String key,
-                          String location) {  //获取天气
+                          String location) {  // 获取天气
 
   std::unique_ptr<BearSSL::WiFiClientSecure> client(
       new BearSSL::WiFiClientSecure);
   client->setInsecure();
-  HTTPClient https;
   String url = "https://devapi.qweather.com/v7/weather/now?lang=en&location=" +
-               location + "&key=" + key + "&gzip=n";
+               location + "&key=" + key;
   Serial.printf("[HTTPS] doUpdateCurr begin...now url:%s\n", url.c_str());
-  if (https.begin(*client, url)) {  // HTTPS
-    // start connection and send HTTP header
-    int httpCode = https.GET();
+  uint8_t *outbuf = NULL;
+  size_t len = 0;
+  bool result = HttpsGetUtils::getString(url.c_str(), outbuf, len);
+  Serial.printf("result=%d, len=%d", result, len);
+  if (outbuf && len) {
+    Serial.printf("write to serial, buf=%x, len=%d\n", outbuf, len);
+    // Serial.write(outbuf, len);
+    Serial.println("parse json");
+    DynamicJsonDocument doc(768);
+    DeserializationError error = deserializeJson(doc, (char *)outbuf, len);
+    if (error) {
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(error.f_str());
+      return;
+    }
+    String httpCode = doc["code"].as<String>();  // "200"
+
+    Serial.println("doUpdateCurr httpCode:" + httpCode);
+
     // httpCode will be negative on error
-    if (httpCode > 0) {
-      // HTTP header has been send and Server response header has been
-      // handled
-      Serial.printf("[HTTPS] doUpdateCurr GET... code: %d\n", httpCode);
+    if (httpCode == "200") {
+      String tmp = doc["now"]["temp"];
+      data->tmp = tmp;
+      String fl = doc["now"]["feelsLike"];
+      data->fl = fl;
+      String hum = doc["now"]["humidity"];
+      data->hum = hum;
+      String wind_sc = doc["now"]["windScale"];
+      data->wind_sc = wind_sc;
+      String cond_code = doc["now"]["icon"];
+      String meteoconIcon = getMeteoconIcon(cond_code);
+      String cond_txt = doc["now"]["text"];
+      data->cond_txt = cond_txt;
+      data->iconMeteoCon = meteoconIcon;
+      Serial.printf("[HTTPS] doUpdateCurr tmp:%s, fl:%s, hum:%s, wind_sc:%s\n",
+                    tmp.c_str(), fl.c_str(), hum.c_str(), wind_sc.c_str());
 
-      if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
-        String payload = https.getString();
-        Serial.printf("[HTTPS] doUpdateCurr payload:%s\n", payload.c_str());
-        StaticJsonDocument<768> doc;
-        DeserializationError error = deserializeJson(doc, payload);
-
-        if (error) {
-          Serial.print(F("deserializeJson() failed: "));
-          Serial.println(error.f_str());
-          return;
-        }
-
-        String tmp = doc["now"]["temp"];
-        data->tmp = tmp;
-        String fl = doc["now"]["feelsLike"];
-        data->fl = fl;
-        String hum = doc["now"]["humidity"];
-        data->hum = hum;
-        String wind_sc = doc["now"]["windScale"];
-        data->wind_sc = wind_sc;
-        String cond_code = doc["now"]["icon"];
-        String meteoconIcon = getMeteoconIcon(cond_code);
-        String cond_txt = doc["now"]["text"];
-        data->cond_txt = cond_txt;
-        data->iconMeteoCon = meteoconIcon;
-        Serial.printf(
-            "[HTTPS] doUpdateCurr tmp:%s, fl:%s, hum:%s, wind_sc:%s\n",
-            tmp.c_str(), fl.c_str(), hum.c_str(), wind_sc.c_str());
-      }
     } else {
       Serial.printf("[HTTPS] GET... failed, error: %s\n",
-                    https.errorToString(httpCode).c_str());
+                    httpCode.c_str());
       data->tmp = "-1";
       data->fl = "-1";
       data->hum = "-1";
@@ -104,8 +104,6 @@ void HeFeng::doUpdateCurr(HeFengCurrentData *data, String key,
       data->cond_txt = "no network";
       data->iconMeteoCon = ")";
     }
-
-    https.end();
   } else {
     Serial.printf("[HTTPS] Unable to connect\n");
     data->tmp = "-1";
@@ -118,57 +116,56 @@ void HeFeng::doUpdateCurr(HeFengCurrentData *data, String key,
 }
 
 void HeFeng::doUpdateFore(HeFengForeData *data, String key,
-                          String location) {  //获取预报
+                          String location) {  // 获取预报
 
   std::unique_ptr<BearSSL::WiFiClientSecure> client(
       new BearSSL::WiFiClientSecure);
   client->setInsecure();
-  HTTPClient https;
   String url =
       "https://devapi.qweather.com/v7/weather/3d?lang=en&location=" + location +
-      "&key=" + key + "&gzip=n";
+      "&key=" + key;
   Serial.printf("[HTTPS] begin...forecast url:%s\n", url.c_str());
-  if (https.begin(*client, url)) {  // HTTPS
-    // start connection and send HTTP header
-    int httpCode = https.GET();
-    // httpCode will be negative on error
-    if (httpCode > 0) {
-      // HTTP header has been send and Server response header has been
-      // handled
-      Serial.printf("[HTTPS] doUpdateFore GET... code: %d\n", httpCode);
+  uint8_t *outbuf = NULL;
+  size_t len = 0;
+  bool result = HttpsGetUtils::getString(url.c_str(), outbuf, len);
+  Serial.printf("result=%d, len=%d", result, len);
+  if (outbuf && len) {
+    Serial.printf("write to serial, buf=%x, len=%d\n", outbuf, len);
+    // Serial.write(outbuf, len);
+    Serial.println("doUpdateFore parse json");
+    DynamicJsonDocument doc(3072);
+    DeserializationError error = deserializeJson(doc, (char *)outbuf, len);
+    if (error) {
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(error.f_str());
+      return;
+    }
+    String httpCode = doc["code"].as<String>();  // "200"
 
-      if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
-        String payload = https.getString();
-        Serial.printf("[HTTPS] doUpdateFore GET payload:%s\n", payload.c_str());
-        DynamicJsonDocument doc(3072);
-        DeserializationError error = deserializeJson(doc, payload);
-        if (error) {
-          Serial.print(F("deserializeJson() failed: "));
-          Serial.println(error.f_str());
-          return;
-        }
-        JsonObject root = doc.as<JsonObject>();
-        int i;
-        for (i = 0; i < 3; i++) {
-          String tmp_min = root["daily"][i]["tempMin"];
-          data[i].tmp_min = tmp_min;
-          String tmp_max = root["daily"][i]["tempMax"];
-          data[i].tmp_max = tmp_max;
-          String datestr = root["daily"][i]["fxDate"];
-          data[i].datestr = datestr.substring(5, datestr.length());
-          String cond_code = root["daily"][i]["iconDay"];
-          String meteoconIcon = getMeteoconIcon(cond_code);
-          data[i].iconMeteoCon = meteoconIcon;
-          Serial.printf(
-              "[HTTPS] doUpdateCurr tmp_min:%s, "
-              "tmp_max:%s, datestr:%s, cond_code:%s\n",
-              tmp_min.c_str(), tmp_max.c_str(), datestr.c_str(),
-              cond_code.c_str());
-        }
+    Serial.println("doUpdateFore httpCode:" + httpCode);
+
+    // httpCode will be negative on error
+    if (httpCode == "200") {
+      JsonObject root = doc.as<JsonObject>();
+      int i;
+      for (i = 0; i < 3; i++) {
+        String tmp_min = root["daily"][i]["tempMin"];
+        data[i].tmp_min = tmp_min;
+        String tmp_max = root["daily"][i]["tempMax"];
+        data[i].tmp_max = tmp_max;
+        String datestr = root["daily"][i]["fxDate"];
+        data[i].datestr = datestr.substring(5, datestr.length());
+        String cond_code = root["daily"][i]["iconDay"];
+        String meteoconIcon = getMeteoconIcon(cond_code);
+        data[i].iconMeteoCon = meteoconIcon;
+        Serial.printf(
+            "[HTTPS] doUpdateCurr tmp_min:%s, "
+            "tmp_max:%s, datestr:%s, cond_code:%s\n",
+            tmp_min.c_str(), tmp_max.c_str(), datestr.c_str(),
+            cond_code.c_str());
       }
     } else {
-      Serial.printf("[HTTPS] GET... failed, error: %s\n",
-                    https.errorToString(httpCode).c_str());
+      Serial.printf("[HTTPS] GET... failed, error: %s\n", httpCode);
       int i;
       for (i = 0; i < 3; i++) {
         data[i].tmp_min = "-1";
@@ -177,7 +174,6 @@ void HeFeng::doUpdateFore(HeFengForeData *data, String key,
         data[i].iconMeteoCon = ")";
       }
     }
-    https.end();
   } else {
     Serial.printf("[HTTPS] doUpdateFore Unable to connect\n");
     int i;
@@ -190,7 +186,7 @@ void HeFeng::doUpdateFore(HeFengForeData *data, String key,
   }
 }
 
-String HeFeng::getMeteoconIcon(String cond_code) {  //获取天气图标
+String HeFeng::getMeteoconIcon(String cond_code) {  // 获取天气图标
   if (cond_code == "100" || cond_code == "9006") {
     return "B";
   }
